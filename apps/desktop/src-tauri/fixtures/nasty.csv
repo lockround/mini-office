@@ -1,0 +1,6 @@
+name,notes,score
+"Smith, John","He said ""hello"" twice",91
+Ana María,"multi-line
+second line, with comma",87.5
+日本語 テスト,trailing spaces kept  ,
+emoji ✓ row,"quote inside ""quoted"" text",-12

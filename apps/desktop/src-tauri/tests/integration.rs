@@ -52,6 +52,7 @@ fn csv_nasty_quoting_round_trip() {
         delimiter: ",".into(),
         has_bom: false,
         crlf: false,
+        encoding: None,
     };
     let dir = tmpdir("nasty");
     let out = dir.join("nasty_out.csv");
@@ -74,7 +75,7 @@ fn csv_bom_detected_and_preserved() {
     write_csv(
         out.to_str().unwrap().into(),
         doc.rows.clone(),
-        CsvWriteOptions { delimiter: ",".into(), has_bom: true, crlf: false },
+        CsvWriteOptions { delimiter: ",".into(), has_bom: true, crlf: false, encoding: None },
     )
     .expect("write");
     let bytes = fs::read(&out).unwrap();
@@ -114,7 +115,7 @@ fn csv_crlf_handled_and_writable() {
     write_csv(
         out.to_str().unwrap().into(),
         doc.rows.clone(),
-        CsvWriteOptions { delimiter: ",".into(), has_bom: false, crlf: true },
+        CsvWriteOptions { delimiter: ",".into(), has_bom: false, crlf: true, encoding: None },
     )
     .expect("write");
     assert_eq!(fs::read(&out).unwrap(), b"a,b\r\n1,2\r\n3,4\r\n");
@@ -125,6 +126,49 @@ fn csv_crlf_handled_and_writable() {
 fn csv_empty_file_yields_no_rows() {
     let doc = parse_csv(fx("empty.csv")).expect("empty file parses");
     assert!(doc.rows.is_empty());
+}
+
+#[test]
+fn csv_windows_1252_detected_and_round_trips() {
+    let doc = parse_csv(fx("ansi.csv")).expect("ANSI file must open");
+    assert_eq!(doc.encoding, "windows-1252");
+    assert_eq!(doc.rows[1], vec!["Müller", "München", "1.200,50"]);
+    assert_eq!(doc.rows[2][0], "Pérez");
+
+    // re-saving with the same encoding keeps the bytes CP1252
+    let dir = tmpdir("ansi");
+    let out = dir.join("ansi_out.csv");
+    write_csv(
+        out.to_str().unwrap().into(),
+        doc.rows.clone(),
+        CsvWriteOptions {
+            delimiter: ",".into(),
+            has_bom: false,
+            crlf: false,
+            encoding: Some("windows-1252".into()),
+        },
+    )
+    .expect("save as cp1252");
+    let original = fs::read(fx("ansi.csv")).unwrap();
+    let rewritten = fs::read(&out).unwrap();
+    assert_eq!(original, rewritten, "cp1252 round trip must be byte-identical");
+
+    // saving the same data as UTF-8 must produce valid UTF-8
+    let utf8_out = dir.join("utf8_out.csv");
+    write_csv(
+        utf8_out.to_str().unwrap().into(),
+        doc.rows.clone(),
+        CsvWriteOptions {
+            delimiter: ",".into(),
+            has_bom: false,
+            crlf: false,
+            encoding: Some("utf-8".into()),
+        },
+    )
+    .expect("save as utf-8");
+    let text = fs::read_to_string(&utf8_out).unwrap();
+    assert!(text.contains("Müller"));
+    fs::remove_dir_all(&dir).ok();
 }
 
 // ------------------------------ XLSX -------------------------------------

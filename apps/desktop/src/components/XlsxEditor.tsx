@@ -4,6 +4,8 @@ import { GridHint } from "./CsvEditor";
 import type { Highlight } from "@glideapps/glide-data-grid";
 import { useTabs } from "../state/tabsStore";
 import { useUi } from "../state/uiStore";
+import GridDataBar from "./GridDataBar";
+import { computeStats } from "../lib/stats";
 
 interface Props {
   tabId: number;
@@ -26,6 +28,7 @@ export default function XlsxEditor({ tabId }: Props) {
   // selected anchor cell for the formula bar
   const [anchor, setAnchor] = useState<{ row: number; col: number } | null>(null);
   const dark = useUi((s) => s.theme === "dark");
+  const setSelectionStats = useTabs((s) => s.setSelectionStats);
 
   const sheet =
     tab?.xlsx && tab.xlsx.sheets[tab.xlsx.activeSheet]
@@ -100,6 +103,7 @@ export default function XlsxEditor({ tabId }: Props) {
 
   return (
     <div className="grid-wrap">
+      <GridDataBar tabId={tabId} col={anchor ? anchor.col : null} />
       <div className="formula-bar">
         <span className="formula-ref">{cellRefText}</span>
         <span className="formula-fx">fx</span>
@@ -133,9 +137,26 @@ export default function XlsxEditor({ tabId }: Props) {
         onColResize={(col, width) => setColWidth(tabId, col, width)}
         onCellEdit={onCellEdit}
         onSetBlock={onSetBlock}
-        onSelectionChange={(row, col) =>
-          setAnchor(row != null && col != null ? { row, col } : null)
-        }
+        onSelectionChange={(row, col, range) => {
+          setAnchor(row != null && col != null ? { row, col } : null);
+          if (!range) {
+            setSelectionStats(null);
+            return;
+          }
+          if (range.width * range.height > 200_000) {
+            setSelectionStats(null);
+            return;
+          }
+          const values: string[] = [];
+          for (let r = range.y; r < range.y + range.height; r++) {
+            const srcRow = sheet.rows[r];
+            if (!srcRow) continue;
+            for (let c = range.x; c < range.x + range.width; c++) {
+              values.push(srcRow[c]?.value ?? "");
+            }
+          }
+          setSelectionStats(computeStats(values));
+        }}
       />
       <div className="sheet-strip">
         {tab.xlsx.sheets.map((sh, i) => (

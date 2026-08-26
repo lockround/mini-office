@@ -137,7 +137,11 @@ export interface SpreadsheetGridProps {
     values: string[][],
     tag: string,
   ) => void;
-  onSelectionChange?: (row: number | null, col: number | null) => void;
+  onSelectionChange?: (
+    row: number | null,
+    col: number | null,
+    range: { x: number; y: number; width: number; height: number } | null,
+  ) => void;
 }
 
 export default function SpreadsheetGrid({
@@ -269,8 +273,14 @@ export default function SpreadsheetGrid({
       onGridSelectionChange={(sel) => {
         selectionRef.current = sel;
         if (onSelectionChange) {
-          const anchor = sel.current?.cell ?? null;
-          onSelectionChange(anchor ? anchor[1] : null, anchor ? anchor[0] : null);
+          const cur = sel.current;
+          const anchor = cur?.cell ?? null;
+          const range = cur?.range ?? null;
+          onSelectionChange(
+            anchor ? anchor[1] : null,
+            anchor ? anchor[0] : null,
+            range ? { x: range.x, y: range.y, width: range.width, height: range.height } : null,
+          );
         }
       }}
       onPaste={handlePaste}

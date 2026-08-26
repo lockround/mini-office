@@ -9,7 +9,9 @@ before making changes.
 and making quick edits to Office files. Deliberately *not* an Office clone:
 no accounts, cloud, telemetry, macros, pivot tables, or charts — ever.
 
-Owner: `lockround/mini-office` on GitHub. Current version: 0.1.x.
+Owner: `lockround/mini-office` on GitHub. Current version: 0.1.x (v0.2 data
+features: encodings, sort/filter, grid replace-all, selection stats,
+session restore).
 
 ## Stack (do not change without strong reason)
 
@@ -22,6 +24,7 @@ Owner: `lockround/mini-office` on GitHub. Current version: 0.1.x.
 | DOCX read | mammoth (browser build) | JS-side import per design decision |
 | DOCX write | `docx` npm v9 | see bare-string gotcha below |
 | XLSX read | calamine 0.36 (+ chrono feature) | values only, no formulas |
+| CSV encodings | encoding_rs | BOM → strict UTF-8 → assume CP1252 |
 | State | Zustand (`src/state/tabsStore.ts`, `uiStore.ts`) | |
 | Tests | Vitest + cargo test | plus openpyxl external validation |
 
@@ -98,6 +101,16 @@ node scripts/generate_docx_fixture.cjs
    App.tsx deliberately skips docx tabs.
 6. Tabs are discriminated by `kind: "csv" | "xlsx" | "docx"` with optional
    payload fields — when adding actions, dispatch on `tab.kind`.
+7. **Grid filtering is destructive-but-undoable** ("Keep matches" removes
+   non-matching rows; Ctrl+Z restores). We deliberately did NOT build a
+   hidden-row view model — every feature (search, paste, stats) would need
+   index remapping. If this ever changes, it is an architecture change.
+8. **Sort is numeric-aware**: if every non-empty value in the column parses
+   as a float, compare numerically (non-numbers sink to the bottom);
+   otherwise locale-compare. freezeHeader keeps row 0 out of sort/filter.
+9. **Selection stats** live in the store (`selectionStats`) and are set by
+   the editors' onSelectionChange with a 200k-cell scan cap — don't compute
+   them in StatusBar.
 
 ## Hard-won gotchas (these WILL bite again)
 
@@ -119,6 +132,10 @@ node scripts/generate_docx_fixture.cjs
 ### Rust / crates
 - `csv` crate has NO Sniffer; we hand-roll delimiter detection in csv.rs
   (must fall back to `,` for single-column files — regression tested).
+- **Encoding detection order** in csv.rs decode_bytes: UTF-16LE/BE BOM →
+  UTF-16 decode → UTF-8 BOM → strict UTF-8 → Windows-1252 fallback. Saving
+  re-encodes via `encode_text`; CP1252 rejects unrepresentable chars rather
+  than mojibake-ing them.
 - **quick-xml 0.42**: emits `&gt;`-style entities as separate
   `Event::GeneralRef` events — dropping them corrupts extracted formulas
   (regression-tested via nested_if in complex.xlsx). Self-closing tags

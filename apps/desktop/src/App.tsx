@@ -13,6 +13,7 @@ import RecoveryDialog from "./components/RecoveryDialog";
 import { useTabs, getActiveTab } from "./state/tabsStore";
 import { useUi } from "./state/uiStore";
 import { upsertRecovery } from "./lib/recovery";
+import { saveSession, loadSession } from "./lib/session";
 import {
   openFileDialog,
   openPath,
@@ -38,6 +39,38 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  // startup restore: CLI args first, then the last workspace session
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const cliPaths = await invoke<string[]>("cli_open_paths");
+        for (const p of cliPaths) await openPath(p);
+      } catch {
+        // command unavailable (e.g. tests); ignore
+      }
+      const session = loadSession();
+      if (session && session.paths.length > 0) {
+        for (const p of session.paths) await openPath(p);
+        if (session.activePath) {
+          const s = useTabs.getState();
+          const target = s.tabs.find((t) => t.path === session.activePath);
+          if (target) s.setActive(target.id);
+        }
+      }
+    })();
+  }, []);
+
+  // persist the workspace whenever the tab set changes
+  const tabs = useTabs((s) => s.tabs);
+  const activeId = useTabs((s) => s.activeId);
+  useEffect(() => {
+    saveSession(tabs, activeId);
+  }, [tabs, activeId]);
+  useEffect(() => {
+    useTabs.getState().setSelectionStats(null);
+  }, [activeId]);
+
   // auto-save recovery snapshots for dirty tabs
   useEffect(() => {
     const timer = setInterval(() => {
@@ -48,18 +81,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // CLI-argument file open (myapp.exe a.csv b.xlsx)
-  useEffect(() => {
-    void (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const paths = await invoke<string[]>("cli_open_paths");
-        for (const p of paths) await openPath(p);
-      } catch {
-        // command unavailable (e.g. tests); ignore
-      }
-    })();
-  }, []);
 
   useEffect(() => {
     let disposed = false;

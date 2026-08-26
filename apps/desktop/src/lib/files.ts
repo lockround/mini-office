@@ -207,6 +207,7 @@ async function writeTab(
           delimiter: tab.csv!.delimiter,
           hasBom: tab.csv!.hasBom,
           crlf: tab.csv!.crlf,
+          encoding: tab.csv!.encoding ?? "utf-8",
         },
       });
       try {

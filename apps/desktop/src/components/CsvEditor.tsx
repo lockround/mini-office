@@ -1,8 +1,10 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import SpreadsheetGrid, { colName } from "./SpreadsheetGrid";
 import type { Highlight } from "@glideapps/glide-data-grid";
 import { useTabs } from "../state/tabsStore";
 import { useUi } from "../state/uiStore";
+import GridDataBar from "./GridDataBar";
+import { computeStats } from "../lib/stats";
 
 interface Props {
   tabId: number;
@@ -11,6 +13,8 @@ interface Props {
 export default function CsvEditor({ tabId }: Props) {
   const tab = useTabs((s) => s.tabs.find((t) => t.id === tabId));
   const dark = useUi((s) => s.theme === "dark");
+  const setSelectionStats = useTabs((s) => s.setSelectionStats);
+  const [anchorCol, setAnchorCol] = useState<number | null>(null);
   const setCsvCell = useTabs((s) => s.setCsvCell);
   const setCellsBlock = useTabs((s) => s.setCellsBlock);
   const setColWidth = useTabs((s) => s.setColWidth);
@@ -50,6 +54,7 @@ export default function CsvEditor({ tabId }: Props) {
 
   return (
     <div className="grid-wrap">
+      <GridDataBar tabId={tabId} col={anchorCol} />
       <SpreadsheetGrid
         rows={rows}
         boldFirstRow={tab.freezeHeader}
@@ -60,6 +65,27 @@ export default function CsvEditor({ tabId }: Props) {
         onColResize={(col, width) => setColWidth(tabId, col, width)}
         onCellEdit={onCellEdit}
         onSetBlock={onSetBlock}
+        onSelectionChange={(_row: number | null, col, range) => {
+          setAnchorCol(col);
+          if (!range || !tab) {
+            setSelectionStats(null);
+            return;
+          }
+          // cap the scan so huge selections don't stall the UI
+          if (range.width * range.height > 200_000) {
+            setSelectionStats(null);
+            return;
+          }
+          const values: string[] = [];
+          for (let r = range.y; r < range.y + range.height; r++) {
+            const row = rows[r];
+            if (!row) continue;
+            for (let c = range.x; c < range.x + range.width; c++) {
+              values.push(row[c] ?? "");
+            }
+          }
+          setSelectionStats(computeStats(values));
+        }}
       />
       <GridHint />
     </div>

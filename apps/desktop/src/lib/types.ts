@@ -23,6 +23,16 @@ export interface CsvDocData {
   delimiter: string;
   hasBom: boolean;
   crlf: boolean;
+  /** encoding label from the backend: utf-8 | utf-8-bom | windows-1252 | utf-16le … */
+  encoding?: string;
+}
+
+export interface SelectionStats {
+  count: number;
+  numericCount: number;
+  sum: number;
+  min: number;
+  max: number;
 }
 
 export interface DocxDocData {

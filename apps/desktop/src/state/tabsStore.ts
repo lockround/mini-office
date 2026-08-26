@@ -5,6 +5,7 @@ import {
   type CellPos,
   type CsvDocData,
   type DocxDocData,
+  type SelectionStats,
   type Tab,
   type XlsxCellData,
   type XlsxDocData,
@@ -37,16 +38,25 @@ interface TabsState {
   status: string;
   searchOpen: boolean;
   searchQuery: string;
+  searchCaseSensitive: boolean;
   searchMatches: CellPos[];
   searchIndex: number;
   docFindOpen: boolean;
+  selectionStats: SelectionStats | null;
 
   setStatus: (s: string) => void;
   setSearchOpen: (open: boolean) => void;
   runSearch: (query: string) => void;
+  setSearchCaseSensitive: (v: boolean) => void;
   stepSearch: (dir: 1 | -1) => void;
   closeSearch: () => void;
   setDocFindOpen: (open: boolean) => void;
+  setSelectionStats: (stats: SelectionStats | null) => void;
+
+  /** replaces every occurrence of query in the active tab's grid; returns count */
+  replaceAllInGrid: (tabId: number, query: string, replacement: string, caseSensitive: boolean) => number;
+  sortColumn: (tabId: number, col: number, dir: "asc" | "desc") => void;
+  filterColumnKeepMatches: (tabId: number, col: number, query: string) => number;
 
   addCsvTab: (path: string | null, data: CsvDocData, sizeBytes: number | null) => void;
   addXlsxTab: (path: string, data: XlsxDocData, sizeBytes: number | null) => void;
@@ -147,9 +157,11 @@ export const useTabs = create<TabsState>((set, get) => ({
   status: "Ready",
   searchOpen: false,
   searchQuery: "",
+  searchCaseSensitive: false,
   searchMatches: [],
   searchIndex: 0,
   docFindOpen: false,
+  selectionStats: null,
 
   setStatus: (status) => set({ status }),
 
@@ -162,11 +174,11 @@ export const useTabs = create<TabsState>((set, get) => ({
     }),
 
   runSearch: (query) => {
-    const { tabs, activeId } = get();
+    const { tabs, activeId, searchCaseSensitive } = get();
     const tab = tabs.find((t) => t.id === activeId);
     const matches: CellPos[] = [];
     if (tab && query) {
-      const q = query.toLowerCase();
+      const q = searchCaseSensitive ? query : query.toLowerCase();
       const rows = activeRows(tab);
       outer: for (let r = 0; r < rows.length; r++) {
         const row = rows[r]!;
@@ -175,7 +187,8 @@ export const useTabs = create<TabsState>((set, get) => ({
             typeof row[c] === "string"
               ? (row[c] as string)
               : ((row[c] as XlsxCellData)?.value ?? "");
-          if (cellValue.toLowerCase().includes(q)) {
+          const hay = searchCaseSensitive ? cellValue : cellValue.toLowerCase();
+          if (hay.includes(q)) {
             matches.push({ row: r, col: c });
             if (matches.length >= 5000) break outer;
           }
@@ -184,6 +197,8 @@ export const useTabs = create<TabsState>((set, get) => ({
     }
     set({ searchQuery: query, searchMatches: matches, searchIndex: 0 });
   },
+
+  setSearchCaseSensitive: (v) => set({ searchCaseSensitive: v }),
 
   stepSearch: (dir) => {
     const { searchMatches, searchIndex } = get();
@@ -195,6 +210,134 @@ export const useTabs = create<TabsState>((set, get) => ({
   closeSearch: () => set({ searchOpen: false, searchMatches: [] }),
 
   setDocFindOpen: (docFindOpen) => set({ docFindOpen }),
+
+  setSelectionStats: (selectionStats) => set({ selectionStats }),
+
+  replaceAllInGrid: (tabId, query, replacement, caseSensitive) => {
+    if (!query) return 0;
+    let count = 0;
+    set((s) =>
+      patchTab(s, tabId, (t) => {
+        const apply = (v: string): string => {
+          if (!v.includes(query)) return v;
+          count += countOccurrences(v, query, caseSensitive);
+          return replaceAllStrings(v, query, replacement, caseSensitive);
+        };
+        if (t.kind === "xlsx" && t.xlsx) {
+          const sheets = t.xlsx.sheets.map((sh, i) =>
+            i === t.xlsx!.activeSheet
+              ? {
+                  ...sh,
+                  rows: sh.rows.map((row) =>
+                    row.map((cell) => ({ ...cell, value: apply(cell.value) })),
+                  ),
+                }
+              : sh,
+          );
+          return applyMutation(t, () => ({ xlsx: { ...t.xlsx!, sheets } }), `repl:${Date.now()}`);
+        }
+        if (!t.csv) return null;
+        return applyMutation(
+          t,
+          () => ({
+            csv: { ...t.csv!, rows: t.csv!.rows.map((row) => row.map(apply)) },
+          }),
+          `repl:${Date.now()}`,
+        );
+      }),
+    );
+    return count;
+  },
+
+  sortColumn: (tabId, col, dir) =>
+    set((s) =>
+      patchTab(s, tabId, (t) => {
+        const numeric = columnIsNumeric(t, col);
+        const cmp = (a: string, b: string): number => {
+          if (numeric) {
+            const na = parseFloat(a);
+            const nb = parseFloat(b);
+            const da = Number.isNaN(na) ? Infinity : na; // non-numbers sink
+            const db = Number.isNaN(nb) ? Infinity : nb;
+            return da - db || a.localeCompare(b);
+          }
+          return a.localeCompare(b, undefined, { numeric: true });
+        };
+        const skipHeader = t.freezeHeader && rowCountOf(t) > 1 ? 1 : 0;
+        if (t.kind === "xlsx") {
+          if (!t.xlsx) return null;
+          return applyMutation(t, () => ({
+            xlsx: mapActiveSheetRows(t.xlsx!, (rows) => {
+              const head = rows.slice(0, skipHeader);
+              const body = rows.slice(skipHeader).map((r) => r.slice());
+              body.sort((ra, rb) =>
+                dir === "asc"
+                  ? cmp(cellText(ra[col]), cellText(rb[col]))
+                  : cmp(cellText(rb[col]), cellText(ra[col])),
+              );
+              return [...head, ...body];
+            }),
+          }), `sort:${Date.now()}`);
+        }
+        if (!t.csv) return null;
+        return applyMutation(t, () => ({
+          csv: {
+            ...t.csv!,
+            rows: (() => {
+              const head = t.csv!.rows.slice(0, skipHeader);
+              const body = t.csv!.rows.slice(skipHeader).map((r) => r.slice());
+              body.sort((ra, rb) =>
+                dir === "asc"
+                  ? cmp(ra[col] ?? "", rb[col] ?? "")
+                  : cmp(rb[col] ?? "", ra[col] ?? ""),
+              );
+              return [...head, ...body];
+            })(),
+          },
+        }), `sort:${Date.now()}`);
+      }),
+    ),
+
+  filterColumnKeepMatches: (tabId, col, query) => {
+    let kept = 0;
+    set((s) =>
+      patchTab(s, tabId, (t) => {
+        const q = query.toLowerCase();
+        const matches = (v: string) => v.toLowerCase().includes(q);
+        const keep = (cellValue: string) =>
+          query === "" || matches(cellValue);
+        const skipHeader = t.freezeHeader && rowCountOf(t) > 1 ? 1 : 0;
+        if (t.kind === "xlsx") {
+          if (!t.xlsx) return null;
+          return applyMutation(t, () => ({
+            xlsx: mapActiveSheetRows(t.xlsx!, (rows) => {
+              const head = rows.slice(0, skipHeader);
+              const body = rows
+                .slice(skipHeader)
+                .filter((r) => keep(r[col]?.value ?? ""));
+              kept = body.length;
+              return [...head, ...body];
+            }),
+          }), `filter:${Date.now()}`);
+        }
+        if (!t.csv) return null;
+        return applyMutation(t, () => ({
+          csv: {
+            ...t.csv!,
+            rows: (() => {
+              const head = t.csv!.rows.slice(0, skipHeader);
+              const body = t.csv!
+                .rows.slice(skipHeader)
+                .filter((r) => keep(r[col] ?? ""));
+              kept = body.length;
+              return [...head, ...body];
+            })(),
+          },
+        }), `filter:${Date.now()}`);
+      }),
+    );
+    return kept;
+  },
 
   addCsvTab: (path, data, sizeBytes) => {
     const existing = get().tabs.find((t) => t.path !== null && t.path === path);
@@ -672,6 +815,50 @@ function rowCountOf(t: Tab): number {
 
 function currentSnapshot(t: Tab): unknown {
   return t.kind === "xlsx" ? t.xlsx!.sheets : t.csv!.rows;
+}
+
+function countOccurrences(haystack: string, needle: string, caseSensitive: boolean): number {
+  const h = caseSensitive ? haystack : haystack.toLowerCase();
+  const n = caseSensitive ? needle : needle.toLowerCase();
+  let count = 0;
+  let idx = h.indexOf(n);
+  while (idx !== -1) {
+    count++;
+    idx = h.indexOf(n, idx + n.length);
+  }
+  return count;
+}
+
+function replaceAllStrings(
+  haystack: string,
+  needle: string,
+  replacement: string,
+  caseSensitive: boolean,
+): string {
+  // escape regex metacharacters so the query is treated literally
+  const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return haystack.replace(new RegExp(esc, caseSensitive ? "g" : "gi"), () => replacement);
+}
+
+function cellText(cell: XlsxCellData | undefined): string {
+  return cell?.value ?? "";
+}
+
+function columnIsNumeric(t: Tab, col: number): boolean {
+  const rows = activeRows(t);
+  const skipHeader = t.freezeHeader && rows.length > 1 ? 1 : 0;
+  let seen = 0;
+  let numeric = 0;
+  for (let r = skipHeader; r < rows.length; r++) {
+    const v =
+      typeof rows[r]![col] === "string"
+        ? (rows[r]![col] as string)
+        : ((rows[r]![col] as XlsxCellData | undefined)?.value ?? "");
+    if (v.trim() === "") continue;
+    seen++;
+    if (!Number.isNaN(parseFloat(v))) numeric++;
+  }
+  return seen > 0 && numeric === seen;
 }
 
 export function getActiveTab(state: TabsState): Tab | undefined {

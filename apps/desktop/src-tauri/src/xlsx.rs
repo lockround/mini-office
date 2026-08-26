@@ -443,7 +443,7 @@ pub fn write_xlsx(path: String, sheets: Vec<XlsxSheetData>) -> Result<super::csv
 
     {
         let mut book = XlsxWorkbook::new();
-        for (i, sheet) in sheets.iter().enumerate() {
+        for (_i, sheet) in sheets.iter().enumerate() {
             let ws = book.add_worksheet();
             ws.set_name(&sheet.name).map_err(|e| e.to_string())?;
             write_cells(ws, &sheet.rows);
